@@ -1,0 +1,992 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPU Fractal Explorer</title>
+    <script src="https://cdn.jsdelivr.net/npm/max-api@1.0.0/dist/max-api.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #000; overflow: hidden; font-family: 'SF Mono', 'Monaco', 'Consolas', monospace; color: #fff; }
+        #canvas { display: block; width: 100vw; height: 100vh; cursor: crosshair; }
+        #controls {
+            position: fixed; top: 10px; left: 10px;
+            background: rgba(0, 0, 0, 0.9); border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px; padding: 15px; width: 340px; max-height: calc(100vh - 20px);
+            overflow-y: auto; transition: transform 0.3s ease; z-index: 100;
+        }
+        #controls.hidden { transform: translateX(-360px); }
+        #toggle-btn {
+            position: fixed; top: 10px; left: 10px;
+            background: rgba(0, 0, 0, 0.85); border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px; color: #fff; padding: 10px 15px; cursor: pointer; z-index: 99; font-size: 12px;
+        }
+        #controls:not(.hidden) ~ #toggle-btn { left: 360px; }
+        h2 { font-size: 14px; font-weight: 600; margin-bottom: 15px; color: #88f; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 8px; }
+        h3 { font-size: 11px; font-weight: 600; margin: 15px 0 8px 0; color: #8f8; text-transform: uppercase; letter-spacing: 1px; }
+        .control-group { margin-bottom: 10px; }
+        label { display: block; font-size: 11px; color: #aaa; margin-bottom: 4px; }
+        input[type="range"] { width: 100%; height: 4px; -webkit-appearance: none; background: rgba(255,255,255,0.1); border-radius: 2px; }
+        input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; background: #88f; border-radius: 50%; cursor: pointer; }
+        input[type="number"], input[type="text"], select {
+            width: 100%; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 4px; color: #fff; padding: 6px 8px; font-family: inherit; font-size: 11px;
+        }
+        select option { background: #222; }
+        button {
+            background: rgba(136,136,255,0.3); border: 1px solid rgba(136,136,255,0.5);
+            border-radius: 4px; color: #fff; padding: 8px 12px; cursor: pointer; font-size: 11px; margin: 2px;
+        }
+        button:hover { background: rgba(136,136,255,0.5); }
+        .btn-row { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
+        .value-display { font-size: 10px; color: #666; text-align: right; margin-top: 2px; }
+        #info { position: fixed; bottom: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 10px; border-radius: 4px; font-size: 10px; color: #888; z-index: 100; }
+        #info .coord { color: #aaa; }
+        #osc-status { position: fixed; top: 10px; right: 10px; background: rgba(0,0,0,0.7); padding: 8px 12px; border-radius: 4px; font-size: 11px; z-index: 100; }
+        #osc-status.connected { color: #8f8; }
+        #osc-status.disconnected { color: #f88; }
+        #osc-status.max { color: #ff8; }
+        .checkbox-group { display: flex; align-items: center; gap: 8px; }
+        .checkbox-group input[type="checkbox"] { width: 16px; height: 16px; }
+        .param-section { display: none; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; padding: 10px; margin: 10px 0; background: rgba(255,255,255,0.02); }
+        .param-section.active { display: block; }
+        .param-section h4 { font-size: 10px; color: #f88; margin-bottom: 8px; text-transform: uppercase; }
+        #keyboard-help { font-size: 9px; color: #555; margin-top: 15px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.1); }
+        #keyboard-help kbd { background: rgba(255,255,255,0.1); padding: 2px 5px; border-radius: 3px; margin-right: 3px; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    
+    <div id="controls">
+        <h2>🌀 GPU Fractal Explorer</h2>
+        
+        <h3>Fractal Type</h3>
+        <div class="control-group">
+            <select id="fractalType">
+                <option value="0">Mandelbrot</option>
+                <option value="1">Burning Ship</option>
+                <option value="2">Multibrot (z^d + c)</option>
+                <option value="3">Newton Fractal</option>
+                <option value="4">Clifford Attractor</option>
+                <option value="5">Domain Coloring</option>
+            </select>
+        </div>
+        
+        <h3>Navigation</h3>
+        <div class="control-group">
+            <label>Center X</label>
+            <input type="number" id="centerX" value="-0.5" step="0.0001">
+        </div>
+        <div class="control-group">
+            <label>Center Y</label>
+            <input type="number" id="centerY" value="0" step="0.0001">
+        </div>
+        <div class="control-group">
+            <label>Zoom (log2)</label>
+            <input type="range" id="zoom" min="-2" max="45" value="1" step="0.01">
+            <div class="value-display" id="zoom-val">2x</div>
+        </div>
+        <div class="btn-row">
+            <button id="reset-view">Reset View</button>
+        </div>
+        
+        <h3>Rendering</h3>
+        <div class="control-group">
+            <label>Max Iterations</label>
+            <input type="range" id="maxIter" min="50" max="5000" value="500" step="10">
+            <div class="value-display" id="maxIter-val">500</div>
+        </div>
+        
+        <!-- Escape-time params -->
+        <div class="param-section active" id="params-escape">
+            <h4>Julia Mode</h4>
+            <div class="control-group checkbox-group">
+                <input type="checkbox" id="juliaMode">
+                <label>Enable Julia Set</label>
+            </div>
+            <div class="control-group">
+                <label>Julia C (Real)</label>
+                <input type="range" id="juliaX" min="-2" max="2" value="-0.7" step="0.001">
+                <div class="value-display" id="juliaX-val">-0.700</div>
+            </div>
+            <div class="control-group">
+                <label>Julia C (Imag)</label>
+                <input type="range" id="juliaY" min="-2" max="2" value="0.27" step="0.001">
+                <div class="value-display" id="juliaY-val">0.270</div>
+            </div>
+            <div class="btn-row">
+                <button class="julia-preset" data-x="0" data-y="1">Dendrite</button>
+                <button class="julia-preset" data-x="-0.123" data-y="0.745">Rabbit</button>
+                <button class="julia-preset" data-x="-0.8" data-y="0.156">Dragon</button>
+            </div>
+        </div>
+        
+        <!-- Multibrot power -->
+        <div class="param-section" id="params-multibrot">
+            <h4>Multibrot Power</h4>
+            <div class="control-group">
+                <label>Power (d)</label>
+                <input type="range" id="multibrotPower" min="2" max="8" value="2" step="0.01">
+                <div class="value-display" id="multibrotPower-val">2.00</div>
+            </div>
+        </div>
+        
+        <!-- Newton params -->
+        <div class="param-section" id="params-newton">
+            <h4>Newton Fractal</h4>
+            <div class="control-group">
+                <label>Polynomial</label>
+                <select id="newtonPoly">
+                    <option value="0">z³ - 1</option>
+                    <option value="1">z⁴ - 1</option>
+                    <option value="2">z⁵ - 1</option>
+                    <option value="3">z⁶ - 1</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label>Relaxation</label>
+                <input type="range" id="newtonRelax" min="0.1" max="2" value="1" step="0.01">
+                <div class="value-display" id="newtonRelax-val">1.00</div>
+            </div>
+        </div>
+        
+        <!-- Clifford params -->
+        <div class="param-section" id="params-clifford">
+            <h4>Clifford Attractor</h4>
+            <div class="control-group">
+                <label>a</label>
+                <input type="range" id="cliffordA" min="-3" max="3" value="-1.4" step="0.001">
+                <div class="value-display" id="cliffordA-val">-1.400</div>
+            </div>
+            <div class="control-group">
+                <label>b</label>
+                <input type="range" id="cliffordB" min="-3" max="3" value="1.6" step="0.001">
+                <div class="value-display" id="cliffordB-val">1.600</div>
+            </div>
+            <div class="control-group">
+                <label>c</label>
+                <input type="range" id="cliffordC" min="-3" max="3" value="1.0" step="0.001">
+                <div class="value-display" id="cliffordC-val">1.000</div>
+            </div>
+            <div class="control-group">
+                <label>d</label>
+                <input type="range" id="cliffordD" min="-3" max="3" value="0.7" step="0.001">
+                <div class="value-display" id="cliffordD-val">0.700</div>
+            </div>
+            <div class="btn-row">
+                <button class="clifford-preset" data-a="-1.4" data-b="1.6" data-c="1.0" data-d="0.7">Classic</button>
+                <button class="clifford-preset" data-a="1.7" data-b="1.7" data-c="0.6" data-d="1.2">Leaf</button>
+                <button class="clifford-preset" data-a="-1.7" data-b="1.3" data-c="-0.1" data-d="-1.2">Swirl</button>
+            </div>
+        </div>
+        
+        <!-- Domain coloring params -->
+        <div class="param-section" id="params-domain">
+            <h4>Complex Function</h4>
+            <div class="control-group">
+                <label>Function f(z)</label>
+                <select id="domainFunc">
+                    <option value="0">z</option>
+                    <option value="1">z²</option>
+                    <option value="2">z³</option>
+                    <option value="3">1/z</option>
+                    <option value="4">sin(z)</option>
+                    <option value="5">cos(z)</option>
+                    <option value="6">exp(z)</option>
+                    <option value="7">tan(z)</option>
+                    <option value="8">(z²-1)/(z²+1)</option>
+                    <option value="9">z + 1/z</option>
+                </select>
+            </div>
+            <div class="control-group checkbox-group">
+                <input type="checkbox" id="domainGrid" checked>
+                <label>Show Grid</label>
+            </div>
+        </div>
+        
+        <h3>Colors</h3>
+        <div class="control-group">
+            <label>Color Scheme</label>
+            <select id="colorScheme">
+                <option value="0">Classic</option>
+                <option value="1">Fire</option>
+                <option value="2">Ocean</option>
+                <option value="3">Rainbow</option>
+                <option value="4">Grayscale</option>
+                <option value="5">Psychedelic</option>
+                <option value="6">Electric</option>
+            </select>
+        </div>
+        <div class="control-group">
+            <label>Color Offset</label>
+            <input type="range" id="colorOffset" min="0" max="1" value="0" step="0.001">
+            <div class="value-display" id="colorOffset-val">0.000</div>
+        </div>
+        <div class="control-group">
+            <label>Color Frequency</label>
+            <input type="range" id="colorFreq" min="0.1" max="10" value="1" step="0.1">
+            <div class="value-display" id="colorFreq-val">1.0</div>
+        </div>
+        
+        <h3>Animation</h3>
+        <div class="control-group checkbox-group">
+            <input type="checkbox" id="autoZoom">
+            <label>Auto Zoom</label>
+        </div>
+        <div class="control-group checkbox-group">
+            <input type="checkbox" id="colorCycle">
+            <label>Color Cycle</label>
+        </div>
+        <div class="control-group checkbox-group">
+            <input type="checkbox" id="animateParams">
+            <label>Animate Parameters</label>
+        </div>
+        <div class="control-group">
+            <label>Animation Speed</label>
+            <input type="range" id="animSpeed" min="0.1" max="3" value="1" step="0.1">
+            <div class="value-display" id="animSpeed-val">1.0</div>
+        </div>
+        
+        <h3>OSC Control</h3>
+        <div class="control-group">
+            <label>WebSocket URL</label>
+            <input type="text" id="wsUrl" value="ws://localhost:8080">
+        </div>
+        <div class="btn-row">
+            <button id="osc-connect">Connect</button>
+            <button id="osc-disconnect">Disconnect</button>
+        </div>
+        
+        <div id="keyboard-help">
+            <kbd>H</kbd> UI <kbd>R</kbd> Reset <kbd>J</kbd> Julia <kbd>Space</kbd> Zoom <kbd>C</kbd> Colors <kbd>1-6</kbd> Type
+        </div>
+    </div>
+    
+    <button id="toggle-btn">☰</button>
+    
+    <div id="info">
+        <div>Fractal: <span class="coord" id="fractal-display">Mandelbrot</span></div>
+        <div>Position: <span class="coord" id="pos-display">(-0.5, 0)</span></div>
+        <div>Zoom: <span class="coord" id="zoom-display">2x</span></div>
+        <div>FPS: <span class="coord" id="fps-display">60</span></div>
+    </div>
+    
+    <div id="osc-status" class="disconnected">OSC: Disconnected</div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const gl = canvas.getContext('webgl2', { antialias: false, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
+        if (!gl) { alert('WebGL2 required'); throw new Error('No WebGL2'); }
+
+        // Vertex shader
+        const vsSource = `#version 300 es
+            in vec2 a_pos;
+            out vec2 v_uv;
+            void main() { v_uv = a_pos * 0.5 + 0.5; gl_Position = vec4(a_pos, 0.0, 1.0); }
+        `;
+
+        // Fragment shader with all fractals
+        const fsSource = `#version 300 es
+            precision highp float;
+            in vec2 v_uv;
+            out vec4 fragColor;
+            
+            uniform vec2 u_res;
+            uniform vec2 u_center;
+            uniform float u_zoom;
+            uniform int u_maxIter;
+            uniform int u_type;
+            uniform int u_colorScheme;
+            uniform float u_colorOffset;
+            uniform float u_colorFreq;
+            uniform float u_time;
+            
+            // Escape fractals
+            uniform bool u_julia;
+            uniform vec2 u_juliaC;
+            uniform float u_power;
+            
+            // Newton
+            uniform int u_newtonPoly;
+            uniform float u_newtonRelax;
+            
+            // Clifford
+            uniform float u_cA, u_cB, u_cC, u_cD;
+            uniform sampler2D u_cliffordTex;
+            
+            // Domain
+            uniform int u_domainFunc;
+            uniform bool u_domainGrid;
+            
+            #define PI 3.14159265359
+            #define TAU 6.28318530718
+            
+            vec3 palette(float t, int s) {
+                t = fract(t);
+                if (s == 0) return vec3(0.5 + 0.5*cos(TAU*(t+0.0)), 0.5 + 0.5*cos(TAU*(t+0.33)), 0.5 + 0.5*cos(TAU*(t+0.67)));
+                if (s == 1) return vec3(smoothstep(0.0,0.5,t), smoothstep(0.25,0.75,t)*0.7, smoothstep(0.5,1.0,t)*0.3);
+                if (s == 2) return vec3(0.1+0.2*sin(TAU*t), 0.3+0.4*sin(TAU*(t+0.25)), 0.5+0.5*sin(TAU*(t+0.5)));
+                if (s == 3) { float h=t*6.0; float x=1.0-abs(mod(h,2.0)-1.0); if(h<1.)return vec3(1,x,0); if(h<2.)return vec3(x,1,0); if(h<3.)return vec3(0,1,x); if(h<4.)return vec3(0,x,1); if(h<5.)return vec3(x,0,1); return vec3(1,0,x); }
+                if (s == 4) { float v=0.5+0.5*sin(TAU*t); return vec3(v); }
+                if (s == 5) return vec3(0.5+0.5*sin(TAU*t*3.0), 0.5+0.5*sin(TAU*t*5.0+2.0), 0.5+0.5*sin(TAU*t*7.0+4.0));
+                return vec3(pow(t,0.5), 0.2+0.8*pow(sin(PI*t),2.0), 1.0-pow(1.0-t,2.0));
+            }
+            
+            vec2 cmul(vec2 a, vec2 b) { return vec2(a.x*b.x-a.y*b.y, a.x*b.y+a.y*b.x); }
+            vec2 cdiv(vec2 a, vec2 b) { float d=dot(b,b); return vec2(a.x*b.x+a.y*b.y, a.y*b.x-a.x*b.y)/d; }
+            vec2 cpow(vec2 z, float n) { float r=length(z); float th=atan(z.y,z.x); return pow(r,n)*vec2(cos(n*th),sin(n*th)); }
+            vec2 cexp(vec2 z) { return exp(z.x)*vec2(cos(z.y),sin(z.y)); }
+            vec2 csin(vec2 z) { return vec2(sin(z.x)*cosh(z.y), cos(z.x)*sinh(z.y)); }
+            vec2 ccos(vec2 z) { return vec2(cos(z.x)*cosh(z.y), -sin(z.x)*sinh(z.y)); }
+            vec2 ctan(vec2 z) { return cdiv(csin(z), ccos(z)); }
+            
+            vec3 mandelbrot(vec2 coord) {
+                vec2 c = u_julia ? u_juliaC : coord;
+                vec2 z = u_julia ? coord : vec2(0.0);
+                int iter = 0;
+                for (int i = 0; i < 10000; i++) {
+                    if (i >= u_maxIter) break;
+                    z = vec2(z.x*z.x - z.y*z.y, 2.0*z.x*z.y) + c;
+                    if (dot(z,z) > 256.0) break;
+                    iter++;
+                }
+                if (iter >= u_maxIter) return vec3(0.0);
+                float sm = float(iter) - log2(log2(dot(z,z))) + 4.0;
+                return palette(sm * u_colorFreq / 100.0 + u_colorOffset, u_colorScheme);
+            }
+            
+            vec3 burningShip(vec2 coord) {
+                vec2 c = u_julia ? u_juliaC : coord;
+                vec2 z = u_julia ? coord : vec2(0.0);
+                int iter = 0;
+                for (int i = 0; i < 10000; i++) {
+                    if (i >= u_maxIter) break;
+                    z = abs(z);
+                    z = vec2(z.x*z.x - z.y*z.y, 2.0*z.x*z.y) + c;
+                    if (dot(z,z) > 256.0) break;
+                    iter++;
+                }
+                if (iter >= u_maxIter) return vec3(0.0);
+                float sm = float(iter) - log2(log2(dot(z,z))) + 4.0;
+                return palette(sm * u_colorFreq / 100.0 + u_colorOffset, u_colorScheme);
+            }
+            
+            vec3 multibrot(vec2 coord) {
+                vec2 c = u_julia ? u_juliaC : coord;
+                vec2 z = u_julia ? coord : vec2(0.0);
+                int iter = 0;
+                for (int i = 0; i < 10000; i++) {
+                    if (i >= u_maxIter) break;
+                    z = cpow(z, u_power) + c;
+                    if (dot(z,z) > 256.0) break;
+                    iter++;
+                }
+                if (iter >= u_maxIter) return vec3(0.0);
+                float sm = float(iter) - log(log(dot(z,z))/log(256.0))/log(u_power);
+                return palette(sm * u_colorFreq / 100.0 + u_colorOffset, u_colorScheme);
+            }
+            
+            vec3 newton(vec2 coord) {
+                vec2 z = coord;
+                int n = u_newtonPoly + 3;
+                float tol = 1e-6;
+                int iter = 0;
+                
+                for (int i = 0; i < 10000; i++) {
+                    if (i >= u_maxIter) break;
+                    vec2 zn = cpow(z, float(n));
+                    vec2 zn1 = cpow(z, float(n-1));
+                    vec2 f = zn - vec2(1.0, 0.0);
+                    vec2 df = float(n) * zn1;
+                    vec2 step = cdiv(f, df);
+                    z = z - u_newtonRelax * step;
+                    if (dot(step,step) < tol*tol) break;
+                    iter++;
+                }
+                
+                float angle = atan(z.y, z.x);
+                int root = int(floor((angle/TAU + 0.5) * float(n) + 0.5));
+                float hue = float(root) / float(n) + u_colorOffset;
+                float bright = 1.0 - float(iter) * u_colorFreq / float(u_maxIter);
+                return palette(hue, u_colorScheme) * clamp(bright, 0.3, 1.0);
+            }
+            
+            vec3 clifford(vec2 coord) {
+                vec2 uv = (coord - u_center) * u_zoom * 0.15 + 0.5;
+                if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return vec3(0.0);
+                float d = texture(u_cliffordTex, uv).r;
+                float t = log(1.0 + d * 50.0) / 4.0 + u_colorOffset;
+                return palette(t, u_colorScheme) * sqrt(d * 5.0);
+            }
+            
+            vec3 domainColor(vec2 coord) {
+                vec2 z = coord;
+                vec2 fz;
+                if (u_domainFunc == 0) fz = z;
+                else if (u_domainFunc == 1) fz = cmul(z,z);
+                else if (u_domainFunc == 2) fz = cmul(cmul(z,z),z);
+                else if (u_domainFunc == 3) fz = cdiv(vec2(1,0), z);
+                else if (u_domainFunc == 4) fz = csin(z);
+                else if (u_domainFunc == 5) fz = ccos(z);
+                else if (u_domainFunc == 6) fz = cexp(z);
+                else if (u_domainFunc == 7) fz = ctan(z);
+                else if (u_domainFunc == 8) fz = cdiv(cmul(z,z)-vec2(1,0), cmul(z,z)+vec2(1,0));
+                else fz = z + cdiv(vec2(1,0), z);
+                
+                float hue = atan(fz.y, fz.x) / TAU + 0.5 + u_colorOffset;
+                float mag = length(fz);
+                float val = 0.5 + 0.5 * sin(log2(mag + 1.0) * PI * u_colorFreq);
+                
+                if (u_domainGrid) {
+                    float gx = abs(fract(fz.x) - 0.5);
+                    float gy = abs(fract(fz.y) - 0.5);
+                    if (gx < 0.03 || gy < 0.03) val *= 0.7;
+                }
+                
+                return palette(hue, u_colorScheme) * val;
+            }
+            
+            void main() {
+                float aspect = u_res.x / u_res.y;
+                vec2 uv = v_uv * 2.0 - 1.0;
+                uv.x *= aspect;
+                vec2 coord = uv / u_zoom + u_center;
+                
+                vec3 color;
+                if (u_type == 0) color = mandelbrot(coord);
+                else if (u_type == 1) color = burningShip(coord);
+                else if (u_type == 2) color = multibrot(coord);
+                else if (u_type == 3) color = newton(coord);
+                else if (u_type == 4) color = clifford(coord);
+                else color = domainColor(coord);
+                
+                fragColor = vec4(color, 1.0);
+            }
+        `;
+
+        function createShader(type, src) {
+            const s = gl.createShader(type);
+            gl.shaderSource(s, src);
+            gl.compileShader(s);
+            if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.error(gl.getShaderInfoLog(s)); return null; }
+            return s;
+        }
+
+        const vs = createShader(gl.VERTEX_SHADER, vsSource);
+        const fs = createShader(gl.FRAGMENT_SHADER, fsSource);
+        const prog = gl.createProgram();
+        gl.attachShader(prog, vs);
+        gl.attachShader(prog, fs);
+        gl.linkProgram(prog);
+
+        const buf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,1,1]), gl.STATIC_DRAW);
+
+        const vao = gl.createVertexArray();
+        gl.bindVertexArray(vao);
+        const posLoc = gl.getAttribLocation(prog, 'a_pos');
+        gl.enableVertexAttribArray(posLoc);
+        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+
+        const u = {};
+        ['res','center','zoom','maxIter','type','colorScheme','colorOffset','colorFreq','time',
+         'julia','juliaC','power','newtonPoly','newtonRelax','cA','cB','cC','cD','cliffordTex',
+         'domainFunc','domainGrid'].forEach(n => u[n] = gl.getUniformLocation(prog, 'u_'+n));
+
+        const clifSize = 2048;
+        const clifTex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, clifTex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, clifSize, clifSize, 0, gl.RED, gl.FLOAT, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+        // =====================================================
+        // STATE
+        // =====================================================
+        const state = {
+            type: 0, centerX: -0.5, centerY: 0, zoom: 1,
+            maxIter: 500, colorScheme: 0, colorOffset: 0, colorFreq: 1,
+            juliaMode: false, juliaX: -0.7, juliaY: 0.27,
+            multibrotPower: 2, newtonPoly: 0, newtonRelax: 1,
+            cliffordA: -1.4, cliffordB: 1.6, cliffordC: 1.0, cliffordD: 0.7, cliffordDirty: true,
+            domainFunc: 4, domainGrid: true,
+            autoZoom: false, colorCycle: false, animateParams: false, animSpeed: 1
+        };
+
+        const names = ['Mandelbrot', 'Burning Ship', 'Multibrot', 'Newton', 'Clifford', 'Domain'];
+        const defaults = [
+            {x:-0.5,y:0,z:1}, {x:-0.4,y:-0.6,z:1}, {x:0,y:0,z:0.5}, 
+            {x:0,y:0,z:0.5}, {x:0,y:0,z:0.3}, {x:0,y:0,z:0.5}
+        ];
+
+        function computeClifford() {
+            const {cliffordA:a, cliffordB:b, cliffordC:c, cliffordD:d} = state;
+            const data = new Float32Array(clifSize * clifSize);
+            let x = 0.1, y = 0.1;
+            for (let i = 0; i < 1000; i++) { const nx = Math.sin(a*y) + c*Math.cos(a*x); const ny = Math.sin(b*x) + d*Math.cos(b*y); x = nx; y = ny; }
+            for (let i = 0; i < 2000000; i++) {
+                const nx = Math.sin(a*y) + c*Math.cos(a*x); const ny = Math.sin(b*x) + d*Math.cos(b*y); x = nx; y = ny;
+                const px = Math.floor(x * clifSize/6 + clifSize/2); const py = Math.floor(y * clifSize/6 + clifSize/2);
+                if (px >= 0 && px < clifSize && py >= 0 && py < clifSize) data[py * clifSize + px] += 0.1;
+            }
+            gl.bindTexture(gl.TEXTURE_2D, clifTex);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, clifSize, clifSize, 0, gl.RED, gl.FLOAT, data);
+            state.cliffordDirty = false;
+        }
+
+        // =====================================================
+        // COMMAND HANDLER (shared by Max API and OSC)
+        // =====================================================
+        function handleCommand(cmd, ...args) {
+            const v = args[0];
+            const v2 = args[1];
+            
+            switch(cmd) {
+                // Fractal type
+                case 'type': setType(Math.floor(v)); break;
+                case 'mandelbrot': setType(0); break;
+                case 'burningship': case 'burning_ship': setType(1); break;
+                case 'multibrot': setType(2); break;
+                case 'newton': setType(3); break;
+                case 'clifford': setType(4); break;
+                case 'domain': setType(5); break;
+                
+                // Navigation
+                case 'centerX': case 'center_x': case 'cx': state.centerX = v; break;
+                case 'centerY': case 'center_y': case 'cy': state.centerY = v; break;
+                case 'center': state.centerX = v; state.centerY = v2; break;
+                case 'zoom': state.zoom = v; break;
+                case 'reset': setType(state.type); break;
+                
+                // Rendering
+                case 'maxIter': case 'max_iter': case 'iterations': case 'iter': state.maxIter = Math.floor(v); break;
+                
+                // Colors
+                case 'colorScheme': case 'color_scheme': case 'scheme': state.colorScheme = Math.floor(v); break;
+                case 'colorOffset': case 'color_offset': case 'offset': state.colorOffset = v; break;
+                case 'colorFreq': case 'color_freq': case 'freq': state.colorFreq = v; break;
+                
+                // Color scheme shortcuts
+                case 'classic': state.colorScheme = 0; break;
+                case 'fire': state.colorScheme = 1; break;
+                case 'ocean': state.colorScheme = 2; break;
+                case 'rainbow': state.colorScheme = 3; break;
+                case 'grayscale': case 'gray': state.colorScheme = 4; break;
+                case 'psychedelic': case 'psych': state.colorScheme = 5; break;
+                case 'electric': state.colorScheme = 6; break;
+                
+                // Julia
+                case 'juliaMode': case 'julia_mode': state.juliaMode = v > 0.5 || v === true; break;
+                case 'juliaX': case 'julia_x': case 'jx': state.juliaX = v; break;
+                case 'juliaY': case 'julia_y': case 'jy': state.juliaY = v; break;
+                case 'julia': 
+                    if (v2 !== undefined) { state.juliaX = v; state.juliaY = v2; }
+                    else { state.juliaMode = v > 0.5 || v === true; }
+                    break;
+                case 'julia_on': state.juliaMode = true; break;
+                case 'julia_off': state.juliaMode = false; break;
+                
+                // Multibrot
+                case 'power': case 'multibrotPower': case 'multibrot_power': state.multibrotPower = v; break;
+                
+                // Newton
+                case 'newtonPoly': case 'newton_poly': case 'poly': state.newtonPoly = Math.floor(v); break;
+                case 'newtonRelax': case 'newton_relax': case 'relax': state.newtonRelax = v; break;
+                
+                // Clifford
+                case 'cliffordA': case 'clifford_a': case 'ca': state.cliffordA = v; state.cliffordDirty = true; break;
+                case 'cliffordB': case 'clifford_b': case 'cb': state.cliffordB = v; state.cliffordDirty = true; break;
+                case 'cliffordC': case 'clifford_c': case 'cc': state.cliffordC = v; state.cliffordDirty = true; break;
+                case 'cliffordD': case 'clifford_d': case 'cd': state.cliffordD = v; state.cliffordDirty = true; break;
+                case 'clifford_params': case 'cliff':
+                    state.cliffordA = v; state.cliffordB = v2; 
+                    state.cliffordC = args[2]; state.cliffordD = args[3]; 
+                    state.cliffordDirty = true; break;
+                
+                // Domain
+                case 'domainFunc': case 'domain_func': case 'func': state.domainFunc = Math.floor(v); break;
+                case 'domainGrid': case 'domain_grid': case 'grid': state.domainGrid = v > 0.5 || v === true; break;
+                case 'grid_on': state.domainGrid = true; break;
+                case 'grid_off': state.domainGrid = false; break;
+                
+                // Animation
+                case 'autoZoom': case 'auto_zoom': case 'autozoom': state.autoZoom = v > 0.5 || v === true; break;
+                case 'colorCycle': case 'color_cycle': case 'cycle': state.colorCycle = v > 0.5 || v === true; break;
+                case 'animateParams': case 'animate_params': case 'animate': state.animateParams = v > 0.5 || v === true; break;
+                case 'animSpeed': case 'anim_speed': case 'speed': state.animSpeed = v; break;
+                
+                // Animation shortcuts
+                case 'autozoom_on': state.autoZoom = true; break;
+                case 'autozoom_off': state.autoZoom = false; break;
+                case 'cycle_on': state.colorCycle = true; break;
+                case 'cycle_off': state.colorCycle = false; break;
+                case 'animate_on': state.animateParams = true; break;
+                case 'animate_off': state.animateParams = false; break;
+                
+                // UI
+                case 'hideui': case 'hide_ui': document.getElementById('controls').classList.add('hidden'); break;
+                case 'showui': case 'show_ui': document.getElementById('controls').classList.remove('hidden'); break;
+                case 'toggleui': case 'toggle_ui': document.getElementById('controls').classList.toggle('hidden'); break;
+                
+                // Get state (outputs to Max)
+                case 'getstate': case 'get_state': case 'dump':
+                    if (window.max) {
+                        window.max.outlet('state', JSON.stringify(state));
+                    }
+                    break;
+                    
+                default:
+                    console.log('Unknown command:', cmd, args);
+            }
+            updateUI();
+        }
+
+        function setType(t) {
+            state.type = t;
+            const d = defaults[t];
+            state.centerX = d.x; state.centerY = d.y; state.zoom = d.z;
+            if (t === 4) state.cliffordDirty = true;
+        }
+
+        // =====================================================
+        // MAX API INTEGRATION
+        // =====================================================
+        let maxConnected = false;
+        
+        if (window.max) {
+            maxConnected = true;
+            document.getElementById('osc-status').textContent = 'Max: Connected';
+            document.getElementById('osc-status').className = 'max';
+            
+            // Register all handlers
+            window.max.bindInlet('type', (v) => handleCommand('type', v));
+            window.max.bindInlet('mandelbrot', () => handleCommand('mandelbrot'));
+            window.max.bindInlet('burningship', () => handleCommand('burningship'));
+            window.max.bindInlet('multibrot', () => handleCommand('multibrot'));
+            window.max.bindInlet('newton', () => handleCommand('newton'));
+            window.max.bindInlet('clifford', () => handleCommand('clifford'));
+            window.max.bindInlet('domain', () => handleCommand('domain'));
+            
+            window.max.bindInlet('centerX', (v) => handleCommand('centerX', v));
+            window.max.bindInlet('centerY', (v) => handleCommand('centerY', v));
+            window.max.bindInlet('center', (x, y) => handleCommand('center', x, y));
+            window.max.bindInlet('cx', (v) => handleCommand('cx', v));
+            window.max.bindInlet('cy', (v) => handleCommand('cy', v));
+            window.max.bindInlet('zoom', (v) => handleCommand('zoom', v));
+            window.max.bindInlet('reset', () => handleCommand('reset'));
+            
+            window.max.bindInlet('maxIter', (v) => handleCommand('maxIter', v));
+            window.max.bindInlet('iterations', (v) => handleCommand('iterations', v));
+            window.max.bindInlet('iter', (v) => handleCommand('iter', v));
+            
+            window.max.bindInlet('colorScheme', (v) => handleCommand('colorScheme', v));
+            window.max.bindInlet('scheme', (v) => handleCommand('scheme', v));
+            window.max.bindInlet('colorOffset', (v) => handleCommand('colorOffset', v));
+            window.max.bindInlet('offset', (v) => handleCommand('offset', v));
+            window.max.bindInlet('colorFreq', (v) => handleCommand('colorFreq', v));
+            window.max.bindInlet('freq', (v) => handleCommand('freq', v));
+            
+            window.max.bindInlet('classic', () => handleCommand('classic'));
+            window.max.bindInlet('fire', () => handleCommand('fire'));
+            window.max.bindInlet('ocean', () => handleCommand('ocean'));
+            window.max.bindInlet('rainbow', () => handleCommand('rainbow'));
+            window.max.bindInlet('grayscale', () => handleCommand('grayscale'));
+            window.max.bindInlet('psychedelic', () => handleCommand('psychedelic'));
+            window.max.bindInlet('electric', () => handleCommand('electric'));
+            
+            window.max.bindInlet('juliaMode', (v) => handleCommand('juliaMode', v));
+            window.max.bindInlet('julia', (...args) => handleCommand('julia', ...args));
+            window.max.bindInlet('juliaX', (v) => handleCommand('juliaX', v));
+            window.max.bindInlet('juliaY', (v) => handleCommand('juliaY', v));
+            window.max.bindInlet('jx', (v) => handleCommand('jx', v));
+            window.max.bindInlet('jy', (v) => handleCommand('jy', v));
+            window.max.bindInlet('julia_on', () => handleCommand('julia_on'));
+            window.max.bindInlet('julia_off', () => handleCommand('julia_off'));
+            
+            window.max.bindInlet('power', (v) => handleCommand('power', v));
+            
+            window.max.bindInlet('newtonPoly', (v) => handleCommand('newtonPoly', v));
+            window.max.bindInlet('poly', (v) => handleCommand('poly', v));
+            window.max.bindInlet('newtonRelax', (v) => handleCommand('newtonRelax', v));
+            window.max.bindInlet('relax', (v) => handleCommand('relax', v));
+            
+            window.max.bindInlet('cliffordA', (v) => handleCommand('cliffordA', v));
+            window.max.bindInlet('cliffordB', (v) => handleCommand('cliffordB', v));
+            window.max.bindInlet('cliffordC', (v) => handleCommand('cliffordC', v));
+            window.max.bindInlet('cliffordD', (v) => handleCommand('cliffordD', v));
+            window.max.bindInlet('ca', (v) => handleCommand('ca', v));
+            window.max.bindInlet('cb', (v) => handleCommand('cb', v));
+            window.max.bindInlet('cc', (v) => handleCommand('cc', v));
+            window.max.bindInlet('cd', (v) => handleCommand('cd', v));
+            window.max.bindInlet('cliff', (a,b,c,d) => handleCommand('cliff', a,b,c,d));
+            
+            window.max.bindInlet('domainFunc', (v) => handleCommand('domainFunc', v));
+            window.max.bindInlet('func', (v) => handleCommand('func', v));
+            window.max.bindInlet('domainGrid', (v) => handleCommand('domainGrid', v));
+            window.max.bindInlet('grid', (v) => handleCommand('grid', v));
+            window.max.bindInlet('grid_on', () => handleCommand('grid_on'));
+            window.max.bindInlet('grid_off', () => handleCommand('grid_off'));
+            
+            window.max.bindInlet('autoZoom', (v) => handleCommand('autoZoom', v));
+            window.max.bindInlet('autozoom', (v) => handleCommand('autozoom', v));
+            window.max.bindInlet('colorCycle', (v) => handleCommand('colorCycle', v));
+            window.max.bindInlet('cycle', (v) => handleCommand('cycle', v));
+            window.max.bindInlet('animateParams', (v) => handleCommand('animateParams', v));
+            window.max.bindInlet('animate', (v) => handleCommand('animate', v));
+            window.max.bindInlet('animSpeed', (v) => handleCommand('animSpeed', v));
+            window.max.bindInlet('speed', (v) => handleCommand('speed', v));
+            
+            window.max.bindInlet('autozoom_on', () => handleCommand('autozoom_on'));
+            window.max.bindInlet('autozoom_off', () => handleCommand('autozoom_off'));
+            window.max.bindInlet('cycle_on', () => handleCommand('cycle_on'));
+            window.max.bindInlet('cycle_off', () => handleCommand('cycle_off'));
+            window.max.bindInlet('animate_on', () => handleCommand('animate_on'));
+            window.max.bindInlet('animate_off', () => handleCommand('animate_off'));
+            
+            window.max.bindInlet('hideui', () => handleCommand('hideui'));
+            window.max.bindInlet('showui', () => handleCommand('showui'));
+            window.max.bindInlet('toggleui', () => handleCommand('toggleui'));
+            
+            window.max.bindInlet('getstate', () => handleCommand('getstate'));
+            window.max.bindInlet('dump', () => handleCommand('dump'));
+            
+            console.log('Max API connected');
+        }
+
+        // =====================================================
+        // UI ELEMENTS
+        // =====================================================
+        const els = {};
+        document.querySelectorAll('input, select').forEach(e => { if(e.id) els[e.id] = e; });
+
+        function updateUI() {
+            els.fractalType.value = state.type;
+            els.centerX.value = state.centerX;
+            els.centerY.value = state.centerY;
+            els.zoom.value = state.zoom;
+            els.maxIter.value = state.maxIter;
+            els.colorScheme.value = state.colorScheme;
+            els.colorOffset.value = state.colorOffset;
+            els.colorFreq.value = state.colorFreq;
+            els.juliaMode.checked = state.juliaMode;
+            els.juliaX.value = state.juliaX;
+            els.juliaY.value = state.juliaY;
+            els.multibrotPower.value = state.multibrotPower;
+            els.newtonPoly.value = state.newtonPoly;
+            els.newtonRelax.value = state.newtonRelax;
+            els.cliffordA.value = state.cliffordA;
+            els.cliffordB.value = state.cliffordB;
+            els.cliffordC.value = state.cliffordC;
+            els.cliffordD.value = state.cliffordD;
+            els.domainFunc.value = state.domainFunc;
+            els.domainGrid.checked = state.domainGrid;
+            els.autoZoom.checked = state.autoZoom;
+            els.colorCycle.checked = state.colorCycle;
+            els.animateParams.checked = state.animateParams;
+            els.animSpeed.value = state.animSpeed;
+
+            document.getElementById('zoom-val').textContent = Math.pow(2, state.zoom).toExponential(1) + 'x';
+            document.getElementById('maxIter-val').textContent = state.maxIter;
+            document.getElementById('colorOffset-val').textContent = state.colorOffset.toFixed(3);
+            document.getElementById('colorFreq-val').textContent = state.colorFreq.toFixed(1);
+            document.getElementById('juliaX-val').textContent = state.juliaX.toFixed(3);
+            document.getElementById('juliaY-val').textContent = state.juliaY.toFixed(3);
+            document.getElementById('multibrotPower-val').textContent = state.multibrotPower.toFixed(2);
+            document.getElementById('newtonRelax-val').textContent = state.newtonRelax.toFixed(2);
+            document.getElementById('cliffordA-val').textContent = state.cliffordA.toFixed(3);
+            document.getElementById('cliffordB-val').textContent = state.cliffordB.toFixed(3);
+            document.getElementById('cliffordC-val').textContent = state.cliffordC.toFixed(3);
+            document.getElementById('cliffordD-val').textContent = state.cliffordD.toFixed(3);
+            document.getElementById('animSpeed-val').textContent = state.animSpeed.toFixed(1);
+
+            document.getElementById('fractal-display').textContent = names[state.type];
+            document.getElementById('pos-display').textContent = `(${state.centerX.toFixed(4)}, ${state.centerY.toFixed(4)})`;
+            document.getElementById('zoom-display').textContent = Math.pow(2, state.zoom).toExponential(1) + 'x';
+
+            document.getElementById('params-escape').classList.toggle('active', state.type <= 2);
+            document.getElementById('params-multibrot').classList.toggle('active', state.type === 2);
+            document.getElementById('params-newton').classList.toggle('active', state.type === 3);
+            document.getElementById('params-clifford').classList.toggle('active', state.type === 4);
+            document.getElementById('params-domain').classList.toggle('active', state.type === 5);
+        }
+
+        // Event bindings
+        els.fractalType.onchange = () => { setType(parseInt(els.fractalType.value)); updateUI(); };
+        els.centerX.oninput = () => { state.centerX = parseFloat(els.centerX.value); updateUI(); };
+        els.centerY.oninput = () => { state.centerY = parseFloat(els.centerY.value); updateUI(); };
+        els.zoom.oninput = () => { state.zoom = parseFloat(els.zoom.value); updateUI(); };
+        els.maxIter.oninput = () => { state.maxIter = parseInt(els.maxIter.value); updateUI(); };
+        els.colorScheme.onchange = () => { state.colorScheme = parseInt(els.colorScheme.value); updateUI(); };
+        els.colorOffset.oninput = () => { state.colorOffset = parseFloat(els.colorOffset.value); updateUI(); };
+        els.colorFreq.oninput = () => { state.colorFreq = parseFloat(els.colorFreq.value); updateUI(); };
+        els.juliaMode.onchange = () => { state.juliaMode = els.juliaMode.checked; updateUI(); };
+        els.juliaX.oninput = () => { state.juliaX = parseFloat(els.juliaX.value); updateUI(); };
+        els.juliaY.oninput = () => { state.juliaY = parseFloat(els.juliaY.value); updateUI(); };
+        els.multibrotPower.oninput = () => { state.multibrotPower = parseFloat(els.multibrotPower.value); updateUI(); };
+        els.newtonPoly.onchange = () => { state.newtonPoly = parseInt(els.newtonPoly.value); updateUI(); };
+        els.newtonRelax.oninput = () => { state.newtonRelax = parseFloat(els.newtonRelax.value); updateUI(); };
+        
+        ['cliffordA','cliffordB','cliffordC','cliffordD'].forEach(k => {
+            els[k].oninput = () => { state[k] = parseFloat(els[k].value); state.cliffordDirty = true; updateUI(); };
+        });
+        
+        els.domainFunc.onchange = () => { state.domainFunc = parseInt(els.domainFunc.value); updateUI(); };
+        els.domainGrid.onchange = () => { state.domainGrid = els.domainGrid.checked; updateUI(); };
+        els.autoZoom.onchange = () => { state.autoZoom = els.autoZoom.checked; updateUI(); };
+        els.colorCycle.onchange = () => { state.colorCycle = els.colorCycle.checked; updateUI(); };
+        els.animateParams.onchange = () => { state.animateParams = els.animateParams.checked; updateUI(); };
+        els.animSpeed.oninput = () => { state.animSpeed = parseFloat(els.animSpeed.value); updateUI(); };
+
+        document.getElementById('reset-view').onclick = () => { setType(state.type); updateUI(); };
+
+        document.querySelectorAll('.julia-preset').forEach(btn => {
+            btn.onclick = () => { state.juliaX = parseFloat(btn.dataset.x); state.juliaY = parseFloat(btn.dataset.y); state.juliaMode = true; updateUI(); };
+        });
+
+        document.querySelectorAll('.clifford-preset').forEach(btn => {
+            btn.onclick = () => {
+                state.cliffordA = parseFloat(btn.dataset.a); state.cliffordB = parseFloat(btn.dataset.b);
+                state.cliffordC = parseFloat(btn.dataset.c); state.cliffordD = parseFloat(btn.dataset.d);
+                state.cliffordDirty = true; updateUI();
+            };
+        });
+
+        const controls = document.getElementById('controls');
+        document.getElementById('toggle-btn').onclick = () => controls.classList.toggle('hidden');
+
+        // Mouse
+        let drag = false, lx = 0, ly = 0;
+        canvas.onmousedown = e => { if(e.button===0) { drag=true; lx=e.clientX; ly=e.clientY; }};
+        canvas.onmousemove = e => {
+            if (drag) {
+                const s = 1 / Math.pow(2, state.zoom);
+                const a = canvas.width / canvas.height;
+                state.centerX -= (e.clientX - lx) / canvas.width * 2 * s * a;
+                state.centerY += (e.clientY - ly) / canvas.height * 2 * s;
+                lx = e.clientX; ly = e.clientY;
+                updateUI();
+            }
+        };
+        canvas.onmouseup = () => drag = false;
+        canvas.onmouseleave = () => drag = false;
+        canvas.onwheel = e => { e.preventDefault(); state.zoom += e.deltaY > 0 ? -0.1 : 0.1; state.zoom = Math.max(-2, Math.min(45, state.zoom)); updateUI(); };
+        canvas.ondblclick = e => {
+            const rect = canvas.getBoundingClientRect();
+            const x = (e.clientX - rect.left) / rect.width;
+            const y = 1 - (e.clientY - rect.top) / rect.height;
+            const a = canvas.width / canvas.height;
+            const s = 1 / Math.pow(2, state.zoom);
+            const cx = (x*2-1) * a * s + state.centerX;
+            const cy = (y*2-1) * s + state.centerY;
+            if (e.shiftKey && state.type <= 2) { state.juliaX = cx; state.juliaY = cy; }
+            else { state.centerX = cx; state.centerY = cy; }
+            updateUI();
+        };
+
+        // Keyboard
+        document.onkeydown = e => {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+            const k = e.key.toLowerCase();
+            if (k === 'h') controls.classList.toggle('hidden');
+            else if (k === 'r') { setType(state.type); updateUI(); }
+            else if (k === 'j') { state.juliaMode = !state.juliaMode; updateUI(); }
+            else if (k === ' ') { e.preventDefault(); state.autoZoom = !state.autoZoom; updateUI(); }
+            else if (k === 'c') { state.colorCycle = !state.colorCycle; updateUI(); }
+            else if (k >= '1' && k <= '6') { setType(parseInt(k)-1); updateUI(); }
+            else if (k === '+' || k === '=') { state.zoom = Math.min(45, state.zoom + 0.5); updateUI(); }
+            else if (k === '-') { state.zoom = Math.max(-2, state.zoom - 0.5); updateUI(); }
+        };
+
+        // OSC WebSocket
+        let ws = null;
+        const oscStatus = document.getElementById('osc-status');
+        document.getElementById('osc-connect').onclick = () => {
+            ws = new WebSocket(els.wsUrl.value);
+            ws.onopen = () => { 
+                if (!maxConnected) { oscStatus.textContent = 'OSC: Connected'; oscStatus.className = 'connected'; }
+            };
+            ws.onclose = () => { 
+                if (!maxConnected) { oscStatus.textContent = 'OSC: Disconnected'; oscStatus.className = 'disconnected'; }
+            };
+            ws.onmessage = e => {
+                const {address, args} = JSON.parse(e.data);
+                const cmd = address.replace('/fractal/', '');
+                handleCommand(cmd, ...args);
+            };
+        };
+        document.getElementById('osc-disconnect').onclick = () => { if(ws) ws.close(); };
+
+        // Render loop
+        let lastT = 0, frames = 0, fpsT = 0;
+        function resize() {
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = window.innerWidth * dpr;
+            canvas.height = window.innerHeight * dpr;
+            gl.viewport(0, 0, canvas.width, canvas.height);
+        }
+        window.onresize = resize;
+        resize();
+
+        function render(t) {
+            const dt = (t - lastT) / 1000;
+            lastT = t;
+            frames++; fpsT += dt;
+            if (fpsT >= 0.5) { document.getElementById('fps-display').textContent = Math.round(frames/fpsT); frames = 0; fpsT = 0; }
+
+            const spd = state.animSpeed;
+            if (state.autoZoom) { state.zoom = Math.min(45, state.zoom + 0.02 * spd); updateUI(); }
+            if (state.colorCycle) { state.colorOffset = (state.colorOffset + 0.001 * spd) % 1; updateUI(); }
+            if (state.animateParams) {
+                const tt = t * 0.001 * spd;
+                if (state.type <= 2 && state.juliaMode) { state.juliaX = 0.7885 * Math.cos(tt); state.juliaY = 0.7885 * Math.sin(tt); }
+                else if (state.type === 2) { state.multibrotPower = 2 + 2 * Math.sin(tt * 0.3); }
+                else if (state.type === 3) { state.newtonRelax = 1 + 0.3 * Math.sin(tt); }
+                else if (state.type === 4) { state.cliffordA = -1.4 + 0.5 * Math.sin(tt * 0.7); state.cliffordB = 1.6 + 0.5 * Math.cos(tt * 0.9); state.cliffordDirty = true; }
+                updateUI();
+            }
+
+            if (state.type === 4 && state.cliffordDirty) computeClifford();
+
+            gl.useProgram(prog);
+            gl.bindVertexArray(vao);
+
+            gl.uniform2f(u.res, canvas.width, canvas.height);
+            gl.uniform2f(u.center, state.centerX, state.centerY);
+            gl.uniform1f(u.zoom, Math.pow(2, state.zoom));
+            gl.uniform1i(u.maxIter, state.maxIter);
+            gl.uniform1i(u.type, state.type);
+            gl.uniform1i(u.colorScheme, state.colorScheme);
+            gl.uniform1f(u.colorOffset, state.colorOffset);
+            gl.uniform1f(u.colorFreq, state.colorFreq);
+            gl.uniform1f(u.time, t / 1000);
+            gl.uniform1i(u.julia, state.juliaMode ? 1 : 0);
+            gl.uniform2f(u.juliaC, state.juliaX, state.juliaY);
+            gl.uniform1f(u.power, state.multibrotPower);
+            gl.uniform1i(u.newtonPoly, state.newtonPoly);
+            gl.uniform1f(u.newtonRelax, state.newtonRelax);
+            gl.uniform1f(u.cA, state.cliffordA);
+            gl.uniform1f(u.cB, state.cliffordB);
+            gl.uniform1f(u.cC, state.cliffordC);
+            gl.uniform1f(u.cD, state.cliffordD);
+            gl.uniform1i(u.domainFunc, state.domainFunc);
+            gl.uniform1i(u.domainGrid, state.domainGrid ? 1 : 0);
+
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, clifTex);
+            gl.uniform1i(u.cliffordTex, 0);
+
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            requestAnimationFrame(render);
+        }
+
+        updateUI();
+        computeClifford();
+        requestAnimationFrame(render);
+    </script>
+</body>
+</html>
